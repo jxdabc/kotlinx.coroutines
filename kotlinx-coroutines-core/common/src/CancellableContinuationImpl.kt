@@ -162,7 +162,10 @@ internal open class CancellableContinuationImpl<in T>(
             }
             else -> {
                 // completed normally without marker class, promote to CompletedContinuation to synchronize cancellation
-                if (_state.compareAndSet(state, CompletedContinuation(state, cancelCause = cause))) return
+                if (_state.compareAndSet(state, CompletedContinuation(state, cancelCause = cause))) {
+                    (state as? Resource<*>)?.let { callCancelResource(it) }
+                    return // done
+                }
             }
         }
     }
@@ -183,7 +186,7 @@ internal open class CancellableContinuationImpl<in T>(
             val update = CancelledContinuation(this, cause, handled = state is CancelHandler)
             if (!_state.compareAndSet(state, update)) return@loop // retry on cas failure
             // Invoke cancel handler if it was present
-            if (state is CancelHandler) invokeHandlerSafely { state.invoke(cause) }
+            (state as? CancelHandler)?.let { callCancelHandler(it, cause) }
             // Complete state update
             detachChildIfNonResuable()
             dispatchResume(mode = MODE_ATOMIC) // no need for additional cancellation checks
@@ -198,7 +201,7 @@ internal open class CancellableContinuationImpl<in T>(
         detachChildIfNonResuable()
     }
 
-    internal inline fun invokeHandlerSafely(block: () -> Unit) {
+    internal inline fun callSafely(block: () -> Unit) {
         try {
             block()
         } catch (ex: Throwable) {
@@ -208,6 +211,18 @@ internal open class CancellableContinuationImpl<in T>(
                 CompletionHandlerException("Exception in cancellation handler for $this", ex)
             )
         }
+    }
+
+    internal fun callCancelHandler(handler: CancelHandler, cause: Throwable?) {
+        callSafely { handler.invoke(cause) }
+    }
+
+    internal fun callOnCancellation(onCancellation: (cause: Throwable) -> Unit, cause: Throwable) {
+        callSafely { onCancellation.invoke(cause) }
+    }
+
+    internal fun callCancelResource(resource: Resource<*>) {
+        callSafely { resource.cancel() }
     }
 
     /**
@@ -285,7 +300,7 @@ internal open class CancellableContinuationImpl<in T>(
                      * because we play type tricks on Kotlin/JS and handler is not necessarily a function there
                      */
                     if (state is CancelledContinuation) {
-                        invokeHandlerSafely { handler.invokeIt((state as? CompletedExceptionally)?.cause) }
+                        callSafely { handler.invokeIt((state as? CompletedExceptionally)?.cause) }
                     }
                     return
                 }
@@ -298,7 +313,7 @@ internal open class CancellableContinuationImpl<in T>(
                         // todo: extra layer of protection against the second invokeOnCancellation
                         // if (!state.makeHandled()) multipleHandlersError(handler, state)
                         // Was already cancelled while being dispatched -- invoke the handler directly
-                        invokeHandlerSafely { handler.invokeIt(state.cancelCause) }
+                        callSafely { handler.invokeIt(state.cancelCause) }
                         return
                     }
                     val update = state.copy(cancelHandler = cancelHandler)
@@ -370,7 +385,9 @@ internal open class CancellableContinuationImpl<in T>(
                      */
                     if (state.makeResumed()) { // check if trying to resume one (otherwise error)
                         // call onCancellation
-                        onCancellation?.let { invokeHandlerSafely { it(state.cause) } }
+                        onCancellation?.let { callOnCancellation(it, state.cause) }
+                        // cancel resource
+                        (state as? Resource<*>)?.let { callCancelResource(it) }
                         return // done
                     }
                 }
@@ -501,7 +518,8 @@ private data class CompletedContinuation(
     val cancelled: Boolean get() = cancelCause != null
 
     fun invokeHandlers(cont: CancellableContinuationImpl<*>, cause: Throwable) {
-        cancelHandler?.let { cont.invokeHandlerSafely { it.invoke(cause) } }
-        onCancellation?.let { cont.invokeHandlerSafely { it.invoke(cause) } }
+        cancelHandler?.let { cont.callCancelHandler(it, cause) }
+        onCancellation?.let { cont.callOnCancellation(it, cause) }
+        (result as? Resource<*>)?.let { cont.callCancelResource(it) }
     }
 }
