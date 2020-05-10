@@ -14,7 +14,8 @@ import kotlin.jvm.*
  */
 internal open class ScopeCoroutine<in T>(
     context: CoroutineContext,
-    @JvmField val uCont: Continuation<T> // unintercepted continuation
+    @JvmField val uCont: Continuation<T>, // unintercepted continuation
+    val childExceptionHandling: ChildExceptionHandling = ChildExceptionHandling.PROPAGATE_ALL
 ) : AbstractCoroutine<T>(context, true), CoroutineStackFrame {
     final override val callerFrame: CoroutineStackFrame? get() = uCont as CoroutineStackFrame?
     final override fun getStackTraceElement(): StackTraceElement? = null
@@ -31,6 +32,14 @@ internal open class ScopeCoroutine<in T>(
         // Resume direct because scope is already in the correct context
         uCont.resumeWith(recoverResult(state, uCont))
     }
+
+    override fun childCancelled(cause: Throwable): Boolean {
+        return when (childExceptionHandling.handlingActionFor(cause)) {
+            ChildExceptionHandling.HandlingAction.IGNORE -> true
+            ChildExceptionHandling.HandlingAction.PROPAGATE -> super.childCancelled(cause)
+            ChildExceptionHandling.HandlingAction.HANDLE_SELF -> false
+        }
+    }
 }
 
 internal class ContextScope(context: CoroutineContext) : CoroutineScope {
@@ -38,3 +47,4 @@ internal class ContextScope(context: CoroutineContext) : CoroutineScope {
     // CoroutineScope is used intentionally for user-friendly representation
     override fun toString(): String = "CoroutineScope(coroutineContext=$coroutineContext)"
 }
+

@@ -4,6 +4,7 @@
 
 package kotlinx.coroutines
 
+import java.io.IOException
 import kotlin.coroutines.*
 import kotlin.test.*
 

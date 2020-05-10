@@ -154,9 +154,14 @@ public object GlobalScope : CoroutineScope {
  * The provided scope inherits its [coroutineContext][CoroutineScope.coroutineContext] from the outer scope, but overrides
  * the context's [Job].
  *
- * This function is designed for _parallel decomposition_ of work. When any child coroutine in this scope fails,
- * this scope fails and all the rest of the children are cancelled (for a different behavior see [supervisorScope]).
+ * This function is designed for _parallel decomposition_ of work.
+ *
+ * By default, when any child coroutine in this scope fails, this scope fails and all the rest of the children are
+ * cancelled (for a different behavior see [supervisorScope]). This default behaviour could be customized with the
+ * optional [childExceptionHandling] parameter, see [ChildExceptionHandling] for details.
+ *
  * This function returns as soon as the given block and all its children coroutines are completed.
+ *
  * A usage example of a scope looks like this:
  *
  * ```
@@ -183,11 +188,16 @@ public object GlobalScope : CoroutineScope {
  * or may throw a corresponding unhandled [Throwable] if there is any unhandled exception in this scope
  * (for example, from a crashed coroutine that was started with [launch][CoroutineScope.launch] in this scope).
  */
+public suspend fun <R> coroutineScope(
+        childExceptionHandling: ChildExceptionHandling,
+        block: suspend CoroutineScope.() -> R
+): R = suspendCoroutineUninterceptedOrReturn { uCont ->
+    val coroutine = ScopeCoroutine(uCont.context, uCont)
+    coroutine.startUndispatchedOrReturn(coroutine, block)
+}
+
 public suspend fun <R> coroutineScope(block: suspend CoroutineScope.() -> R): R =
-    suspendCoroutineUninterceptedOrReturn { uCont ->
-        val coroutine = ScopeCoroutine(uCont.context, uCont)
-        coroutine.startUndispatchedOrReturn(coroutine, block)
-    }
+        coroutineScope(ChildExceptionHandling.PROPAGATE_ALL, block)
 
 /**
  * Creates a [CoroutineScope] that wraps the given coroutine [context].
@@ -233,3 +243,59 @@ public fun CoroutineScope.cancel(message: String, cause: Throwable? = null): Uni
  * ```
  */
 public fun CoroutineScope.ensureActive(): Unit = coroutineContext.ensureActive()
+
+/**
+ * Specifies how exceptions from direct child scopes should be handled.
+ *
+ * This handing strategy only affects children that do not return a result, eg., those started by [launch].
+ * Children that return a result eg., those started by [withContext] or [async], always pass exceptions to the
+ * parent scope via their results.
+ *
+ * For such an exception, one of three handling actions could be specified:
+ * [HandlingAction.IGNORE] This exception should be ignored.
+ * [HandlingAction.PROPAGATE] This exception should be propagated to the parent scope and the parent scope should
+ * fail with this exception.
+ * [HandlingAction.HANDLE_SELF] This exception should be handled by the child scope, via [CoroutineExceptionHandler]
+ * or other customized handlers.
+ */
+public interface ChildExceptionHandling {
+    /**
+     * Specifies a handing action for such an exception.
+     */
+    public fun handlingActionFor(exception: Throwable): HandlingAction
+
+    /**
+     * Handling actions.
+     */
+    public enum class HandlingAction {
+        IGNORE,
+        PROPAGATE,
+        HANDLE_SELF,
+    }
+
+    /**
+     * Pre-defined strategies.
+     */
+    public companion object {
+        /**
+         * All such exceptions should be propagated to the parent scope.
+         */
+        public val PROPAGATE_ALL : ChildExceptionHandling = object : ChildExceptionHandling {
+            override fun handlingActionFor(exception: Throwable): HandlingAction = HandlingAction.PROPAGATE
+        }
+
+        /**
+         * All such exceptions should be ignored.
+         */
+        public val IGNORE_ALL: ChildExceptionHandling = object : ChildExceptionHandling {
+            override fun handlingActionFor(exception: Throwable): HandlingAction = HandlingAction.IGNORE
+        }
+
+        /**
+         * All such exceptions should be handled by the child scope.
+         */
+        public val HANDLE_SELF_ALL: ChildExceptionHandling = object : ChildExceptionHandling {
+            override fun handlingActionFor(exception: Throwable): HandlingAction = HandlingAction.HANDLE_SELF
+        }
+    }
+}

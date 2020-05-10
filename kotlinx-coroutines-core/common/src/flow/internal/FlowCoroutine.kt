@@ -5,12 +5,13 @@
 package kotlinx.coroutines.flow.internal
 
 import kotlinx.coroutines.*
-import kotlinx.coroutines.channels.*
-import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.internal.*
-import kotlinx.coroutines.intrinsics.*
-import kotlin.coroutines.*
-import kotlin.coroutines.intrinsics.*
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ProducerCoroutine
+import kotlinx.coroutines.channels.ProducerScope
+import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
+import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.flow.internal.unsafeFlow as flow
 
 /**
@@ -28,10 +29,16 @@ import kotlinx.coroutines.flow.internal.unsafeFlow as flow
  * ```
  */
 internal suspend fun <R> flowScope(@BuilderInference block: suspend CoroutineScope.() -> R): R =
-    suspendCoroutineUninterceptedOrReturn { uCont ->
-        val coroutine = FlowCoroutine(uCont.context, uCont)
-        coroutine.startUndispatchedOrReturn(coroutine, block)
+        coroutineScope (flowScopeChildExceptionHandling, block)
+
+private object flowScopeChildExceptionHandling : ChildExceptionHandling {
+    override fun handlingActionFor(exception: Throwable): ChildExceptionHandling.HandlingAction {
+        return when (exception) {
+            is ChildCancelledException -> ChildExceptionHandling.HandlingAction.IGNORE
+            else -> ChildExceptionHandling.HandlingAction.PROPAGATE
+        }
     }
+}
 
 /**
  * Creates a flow that also provides a [CoroutineScope] for each collector
@@ -61,16 +68,6 @@ internal fun <T> CoroutineScope.flowProduce(
     val coroutine = FlowProduceCoroutine(newContext, channel)
     coroutine.start(CoroutineStart.ATOMIC, coroutine, block)
     return coroutine
-}
-
-private class FlowCoroutine<T>(
-    context: CoroutineContext,
-    uCont: Continuation<T>
-) : ScopeCoroutine<T>(context, uCont) {
-    public override fun childCancelled(cause: Throwable): Boolean {
-        if (cause is ChildCancelledException) return true
-        return cancelImpl(cause)
-    }
 }
 
 private class FlowProduceCoroutine<T>(

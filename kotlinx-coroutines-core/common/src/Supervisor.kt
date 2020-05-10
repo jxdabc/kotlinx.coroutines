@@ -6,10 +6,6 @@
 
 package kotlinx.coroutines
 
-import kotlinx.coroutines.internal.*
-import kotlinx.coroutines.intrinsics.*
-import kotlin.coroutines.*
-import kotlin.coroutines.intrinsics.*
 import kotlin.jvm.*
 
 /**
@@ -48,18 +44,8 @@ public fun SupervisorJob0(parent: Job? = null) : Job = SupervisorJob(parent)
  * but does not cancel parent job.
  */
 public suspend fun <R>  supervisorScope(block: suspend CoroutineScope.() -> R): R =
-    suspendCoroutineUninterceptedOrReturn { uCont ->
-        val coroutine = SupervisorCoroutine(uCont.context, uCont)
-        coroutine.startUndispatchedOrReturn(coroutine, block)
-    }
+        coroutineScope(ChildExceptionHandling.HANDLE_SELF_ALL, block)
 
 private class SupervisorJobImpl(parent: Job?) : JobImpl(parent) {
-    override fun childCancelled(cause: Throwable): Boolean = false
-}
-
-private class SupervisorCoroutine<in T>(
-    context: CoroutineContext,
-    uCont: Continuation<T>
-) : ScopeCoroutine<T>(context, uCont) {
     override fun childCancelled(cause: Throwable): Boolean = false
 }
